@@ -1,0 +1,120 @@
+{
+  "Comment": "Chatbot para Atendimento ao Cliente com AWS Step Functions, Amazon Bedrock e DynamoDB",
+  "StartAt": "ObterListaDeChamados",
+  "States": {
+    "ObterListaDeChamados": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGIAO:ID_CONTA:function:FunçãoObterLista",
+      "Next": "InicializarHistoricoDeConversa"
+    },
+    "InicializarHistoricoDeConversa": {
+      "Type": "Pass",
+      "Result": "",
+      "ResultPath": "$.HistoricoDeConversa",
+      "Next": "CondicaoDoLoop"
+    },
+    "CondicaoDoLoop": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.Lista[0]",
+          "StringEquals": "CONCLUIDO",
+          "Next": "EstadoDeSucesso"
+        }
+      ],
+      "Default": "LerChamadoDynamoDB"
+    },
+    "LerChamadoDynamoDB": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Parameters": {
+        "TableName": "TabelaChamados",
+        "Key": {
+          "MessageId": {
+            "S.$": "$.Lista[0]"
+          }
+        }
+      },
+      "ResultPath": "$.DynamoDB",
+      "Next": "AtualizarHistoricoComMensagem"
+    },
+    "AtualizarHistoricoComMensagem": {
+      "Type": "Pass",
+      "ResultPath": "$.HistoricoDeConversa",
+      "Parameters": {
+        "HistoricoAtualizado": {
+          "Fn::Join": [
+            " ",
+            [
+              "$.HistoricoDeConversa",
+              "$.DynamoDB.Item.Mensagem.S"
+            ]
+          ]
+        }
+      },
+      "Next": "TruncarHistorico"
+    },
+    "TruncarHistorico": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGIAO:ID_CONTA:function:FuncaoTruncarHistorico",
+      "Parameters": {
+        "HistoricoDeConversa.$": "$.HistoricoDeConversa",
+        "TamanhoMaximo": 2000
+      },
+      "ResultPath": "$.HistoricoDeConversa",
+      "Next": "InvocarModeloComMensagem"
+    },
+    "InvocarModeloComMensagem": {
+      "Type": "Task",
+      "Resource": "arn:aws:bedrock:model/cohere.command-text-v14",
+      "Parameters": {
+        "prompt.$": "$.HistoricoDeConversa",
+        "max_tokens": 250
+      },
+      "ResultPath": "$.ResultadoModelo",
+      "Next": "AtualizarHistoricoComResposta"
+    },
+    "AtualizarHistoricoComResposta": {
+      "Type": "Pass",
+      "ResultPath": "$.HistoricoDeConversa",
+      "Parameters": {
+        "HistoricoFinal": {
+          "Fn::Join": [
+            " ",
+            [
+              "$.HistoricoDeConversa",
+              "$.ResultadoModelo.ModelResponse"
+            ]
+          ]
+        }
+      },
+      "Next": "TruncarHistoricoAposResposta"
+    },
+    "TruncarHistoricoAposResposta": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGIAO:ID_CONTA:function:FuncaoTruncarHistorico",
+      "Parameters": {
+        "HistoricoDeConversa.$": "$.HistoricoDeConversa",
+        "TamanhoMaximo": 2000
+      },
+      "ResultPath": "$.HistoricoDeConversa",
+      "Next": "RemoverElementoDaLista"
+    },
+    "RemoverElementoDaLista": {
+      "Type": "Pass",
+      "ResultPath": "$.Lista",
+      "Parameters": {
+        "ListaAtualizada": {
+          "Fn::Select": [
+            "1",
+            "$.Lista"
+          ]
+        }
+      },
+      "Next": "CondicaoDoLoop"
+    },
+    "EstadoDeSucesso": {
+      "Type": "Succeed"
+    }
+  }
+}
